@@ -1,0 +1,5 @@
+/chiperka-worker
+/dist/
+coverage.out
+*.test
+.idea/
