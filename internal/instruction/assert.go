@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"chiperka-worker/internal/assertion"
 	"chiperka-worker/internal/dag"
@@ -73,6 +75,22 @@ func (h *AssertHandler) Execute(ctx context.Context, ictx *Context, params json.
 	if p.ArtifactInfosStep != "" {
 		evalCtx.ArtifactInfos = buildArtifactInfos(ictx.State, p.ArtifactInfosStep)
 	}
+	evalCtx.ArtifactInfos = append(evalCtx.ArtifactInfos, buildDiffArtifactInfos(ictx.State)...)
+
+	// The CLI output is available as the stdout.txt and stderr.txt artifacts.
+	var tempDir string
+	if evalCtx.CLIResponse != nil {
+		var err error
+		tempDir, err = os.MkdirTemp("", "chiperka-cli-output-*")
+		if err != nil {
+			return nil, fmt.Errorf("assert: failed to create CLI output dir: %w", err)
+		}
+		cliArtifacts, err := writeCLIOutputArtifacts(ictx, tempDir, evalCtx.CLIResponse)
+		if err != nil {
+			return nil, fmt.Errorf("assert: %w", err)
+		}
+		evalCtx.ArtifactInfos = append(evalCtx.ArtifactInfos, cliArtifacts...)
+	}
 
 	evaluator := assertion.NewEvaluator()
 	results, allPassed := evaluator.EvaluateAll(p.Assertions, evalCtx)
@@ -94,12 +112,17 @@ func (h *AssertHandler) Execute(ctx context.Context, ictx *Context, params json.
 		status = dag.StepFailed
 	}
 
+	data := map[string]interface{}{
+		"all_passed": allPassed,
+		"results":    serializedResults,
+	}
+	if tempDir != "" {
+		data["temp_dir"] = tempDir // removed by the cleanup step
+	}
+
 	return &dag.StepResult{
 		Status: status,
-		Data: map[string]interface{}{
-			"all_passed": allPassed,
-			"results":    serializedResults,
-		},
+		Data:   data,
 	}, nil
 }
 
@@ -205,4 +228,55 @@ func buildArtifactInfos(state *dag.StateBag, stepName string) []assertion.Artifa
 		infos = append(infos, info)
 	}
 	return infos
+}
+
+// buildDiffArtifactInfos returns the outputs of diff steps (e.g. db_state.diff),
+// which are produced after the artifacts were extracted from the services.
+func buildDiffArtifactInfos(state *dag.StateBag) []assertion.ArtifactInfo {
+	var infos []assertion.ArtifactInfo
+	for _, r := range state.AllResults() {
+		if r == nil || r.Data == nil || r.Data["type"] != "diff" {
+			continue
+		}
+		name, _ := r.Data["output"].(string)
+		path, _ := r.Data["output_path"].(string)
+		if name == "" || path == "" {
+			continue
+		}
+		var size int64
+		switch v := r.Data["output_size"].(type) {
+		case int:
+			size = int64(v)
+		case float64:
+			size = int64(v)
+		}
+		infos = append(infos, assertion.ArtifactInfo{Name: name, Path: path, Size: size})
+	}
+	return infos
+}
+
+// writeCLIOutputArtifacts writes the CLI stdout and stderr to dir and uploads them as artifacts.
+func writeCLIOutputArtifacts(ictx *Context, dir string, resp *executor.CLIResponse) ([]assertion.ArtifactInfo, error) {
+	outputs := []struct {
+		name    string
+		content []byte
+	}{
+		{"stdout.txt", resp.Stdout},
+		{"stderr.txt", resp.Stderr},
+	}
+
+	var infos []assertion.ArtifactInfo
+	for _, o := range outputs {
+		path := filepath.Join(dir, o.name)
+		if err := os.WriteFile(path, o.content, 0644); err != nil {
+			return nil, fmt.Errorf("failed to write %s: %w", o.name, err)
+		}
+		if ictx.APIClient != nil && len(o.content) > 0 {
+			if err := ictx.APIClient.UploadArtifact(ictx.JobToken, ictx.JobID, o.name, string(o.content)); err != nil {
+				ictx.Log("warn", "assert", "", fmt.Sprintf("Failed to upload artifact %s: %v", o.name, err), "assert")
+			}
+		}
+		infos = append(infos, assertion.ArtifactInfo{Name: o.name, Path: path, Size: int64(len(o.content))})
+	}
+	return infos, nil
 }

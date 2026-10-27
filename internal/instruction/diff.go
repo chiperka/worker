@@ -15,11 +15,11 @@ import (
 type DiffHandler struct{}
 
 type DiffParams struct {
-	Source          string `json:"source"`              // source artifact name
-	Target          string `json:"target"`              // target artifact name
-	Output          string `json:"output"`              // output artifact name
-	Optional        bool   `json:"optional,omitempty"`  // skip if files missing
-	CollectLogsStep string `json:"collect_logs_step"`   // step name to get artifact paths from
+	Source          string `json:"source"`             // source artifact name
+	Target          string `json:"target"`             // target artifact name
+	Output          string `json:"output"`             // output artifact name
+	Optional        bool   `json:"optional,omitempty"` // skip if files missing
+	CollectLogsStep string `json:"collect_logs_step"`  // step name to get artifact paths from
 }
 
 func (h *DiffHandler) Execute(ctx context.Context, ictx *Context, params json.RawMessage) (*dag.StepResult, error) {
@@ -67,8 +67,8 @@ func (h *DiffHandler) Execute(ctx context.Context, ictx *Context, params json.Ra
 		return nil, fmt.Errorf("transform: failed to read target %q: %w", p.Target, err)
 	}
 
-	// Compute unified diff
-	diff := computeUnifiedDiff(p.Source, p.Target, string(sourceContent), string(targetContent))
+	// Compute diff
+	diff := computeDiff(p.Source, p.Target, string(sourceContent), string(targetContent))
 
 	// Write diff to temp file
 	outputDir := filepath.Dir(sourcePath)
@@ -135,8 +135,9 @@ func findArtifactPath(ictx *Context, stepName, artifactName string) (string, boo
 	return "", false
 }
 
-// computeUnifiedDiff produces a unified diff between two strings.
-func computeUnifiedDiff(nameA, nameB, contentA, contentB string) string {
+// computeDiff produces the diff format of the Chiperka CLI: the ---/+++ header
+// followed by the deleted and inserted lines only, without hunks or context.
+func computeDiff(nameA, nameB, contentA, contentB string) string {
 	linesA := splitLines(contentA)
 	linesB := splitLines(contentB)
 
@@ -148,22 +149,12 @@ func computeUnifiedDiff(nameA, nameB, contentA, contentB string) string {
 	buf.WriteString(fmt.Sprintf("--- %s\n", nameA))
 	buf.WriteString(fmt.Sprintf("+++ %s\n", nameB))
 
-	// Simple line-by-line diff using longest common subsequence
-	edits := diffLines(linesA, linesB)
-	chunks := groupEdits(edits, 3) // 3 lines context
-
-	for _, chunk := range chunks {
-		aStart, aLen, bStart, bLen := chunk.header()
-		buf.WriteString(fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", aStart, aLen, bStart, bLen))
-		for _, e := range chunk.edits {
-			switch e.op {
-			case opEqual:
-				buf.WriteString(" " + e.line + "\n")
-			case opDelete:
-				buf.WriteString("-" + e.line + "\n")
-			case opInsert:
-				buf.WriteString("+" + e.line + "\n")
-			}
+	for _, e := range diffLines(linesA, linesB) {
+		switch e.op {
+		case opDelete:
+			buf.WriteString("-" + e.line + "\n")
+		case opInsert:
+			buf.WriteString("+" + e.line + "\n")
 		}
 	}
 	return buf.String()
@@ -172,43 +163,14 @@ func computeUnifiedDiff(nameA, nameB, contentA, contentB string) string {
 type editOp int
 
 const (
-	opEqual  editOp = iota
+	opEqual editOp = iota
 	opDelete
 	opInsert
 )
 
 type edit struct {
-	op    editOp
-	line  string
-	aLine int // 1-based line in A
-	bLine int // 1-based line in B
-}
-
-type diffChunk struct {
-	edits []edit
-}
-
-func (c diffChunk) header() (aStart, aLen, bStart, bLen int) {
-	aStart, bStart = 1, 1
-	for _, e := range c.edits {
-		if e.op != opInsert && e.aLine > 0 {
-			aStart = e.aLine
-			break
-		}
-		if e.op != opDelete && e.bLine > 0 {
-			bStart = e.bLine
-			break
-		}
-	}
-	for _, e := range c.edits {
-		if e.op != opInsert {
-			aLen++
-		}
-		if e.op != opDelete {
-			bLen++
-		}
-	}
-	return
+	op   editOp
+	line string
 }
 
 func splitLines(s string) []string {
@@ -236,11 +198,11 @@ func diffLines(a, b []string) []edit {
 	// For very large files, fall back to simple output
 	if n*m > 10_000_000 {
 		var edits []edit
-		for i, line := range a {
-			edits = append(edits, edit{op: opDelete, line: line, aLine: i + 1})
+		for _, line := range a {
+			edits = append(edits, edit{op: opDelete, line: line})
 		}
-		for i, line := range b {
-			edits = append(edits, edit{op: opInsert, line: line, bLine: i + 1})
+		for _, line := range b {
+			edits = append(edits, edit{op: opInsert, line: line})
 		}
 		return edits
 	}
@@ -267,14 +229,14 @@ func diffLines(a, b []string) []edit {
 	i, j := n, m
 	for i > 0 || j > 0 {
 		if i > 0 && j > 0 && a[i-1] == b[j-1] {
-			edits = append(edits, edit{op: opEqual, line: a[i-1], aLine: i, bLine: j})
+			edits = append(edits, edit{op: opEqual, line: a[i-1]})
 			i--
 			j--
 		} else if j > 0 && (i == 0 || dp[i][j-1] >= dp[i-1][j]) {
-			edits = append(edits, edit{op: opInsert, line: b[j-1], bLine: j})
+			edits = append(edits, edit{op: opInsert, line: b[j-1]})
 			j--
 		} else {
-			edits = append(edits, edit{op: opDelete, line: a[i-1], aLine: i})
+			edits = append(edits, edit{op: opDelete, line: a[i-1]})
 			i--
 		}
 	}
@@ -284,42 +246,4 @@ func diffLines(a, b []string) []edit {
 		edits[l], edits[r] = edits[r], edits[l]
 	}
 	return edits
-}
-
-// groupEdits splits edits into chunks with context lines.
-func groupEdits(edits []edit, context int) []diffChunk {
-	if len(edits) == 0 {
-		return nil
-	}
-
-	// Find ranges of changes
-	type changeRange struct{ start, end int }
-	var changes []changeRange
-	for i, e := range edits {
-		if e.op != opEqual {
-			if len(changes) == 0 || i-changes[len(changes)-1].end > context*2 {
-				changes = append(changes, changeRange{i, i})
-			} else {
-				changes[len(changes)-1].end = i
-			}
-		}
-	}
-
-	if len(changes) == 0 {
-		return nil
-	}
-
-	var chunks []diffChunk
-	for _, cr := range changes {
-		start := cr.start - context
-		if start < 0 {
-			start = 0
-		}
-		end := cr.end + context + 1
-		if end > len(edits) {
-			end = len(edits)
-		}
-		chunks = append(chunks, diffChunk{edits: edits[start:end]})
-	}
-	return chunks
 }

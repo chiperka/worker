@@ -658,6 +658,71 @@ func TestAssert_WithArtifactInfosStep(t *testing.T) {
 	}
 }
 
+func TestAssert_CLIOutputArtifacts(t *testing.T) {
+	suiteDir := t.TempDir()
+	os.WriteFile(filepath.Join(suiteDir, "stdout.txt"), []byte("[{\"id\":1}]"), 0644)
+
+	state := dag.NewStateBag()
+	state.Set("exec", &dag.StepResult{
+		Status: dag.StepCompleted,
+		Data:   map[string]interface{}{"exit_code": float64(0), "stdout": "[{\"id\":1}]", "stderr": ""},
+	})
+
+	handler := &AssertHandler{}
+	ictx := &Context{State: state}
+	params, _ := json.Marshal(map[string]interface{}{
+		"assertions": []interface{}{
+			map[string]interface{}{"artifact": map[string]interface{}{"name": "stdout.txt", "snapshot": "./stdout.txt"}},
+			map[string]interface{}{"artifact": map[string]interface{}{"name": "stderr.txt", "exists": true}},
+		},
+		"cli_response_step": "exec",
+		"suite_file_path":   filepath.Join(suiteDir, "test.chiperka"),
+	})
+	result, err := handler.Execute(context.Background(), ictx, params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != dag.StepCompleted {
+		t.Errorf("expected completed, got %s: %v", result.Status, result.Data["results"])
+	}
+	tempDir, _ := result.Data["temp_dir"].(string)
+	if tempDir == "" {
+		t.Fatal("expected temp_dir for the cleanup step")
+	}
+	os.RemoveAll(tempDir)
+}
+
+func TestAssert_DiffOutputArtifact(t *testing.T) {
+	suiteDir := t.TempDir()
+	os.WriteFile(filepath.Join(suiteDir, "db_state.diff"), []byte("--- a\n+++ b\n"), 0644)
+	outputPath := filepath.Join(t.TempDir(), "db_state.diff")
+	os.WriteFile(outputPath, []byte("--- a\n+++ b\n"), 0644)
+
+	state := dag.NewStateBag()
+	state.Set("collect", &dag.StepResult{Status: dag.StepCompleted, Data: map[string]interface{}{"artifacts": []interface{}{}}})
+	state.Set("hook_after_1", &dag.StepResult{
+		Status: dag.StepCompleted,
+		Data:   map[string]interface{}{"type": "diff", "output": "db_state.diff", "output_path": outputPath, "output_size": 12},
+	})
+
+	handler := &AssertHandler{}
+	ictx := &Context{State: state}
+	params, _ := json.Marshal(map[string]interface{}{
+		"assertions": []interface{}{
+			map[string]interface{}{"artifact": map[string]interface{}{"name": "db_state.diff", "snapshot": "./db_state.diff"}},
+		},
+		"artifact_infos_step": "collect",
+		"suite_file_path":     filepath.Join(suiteDir, "test.chiperka"),
+	})
+	result, err := handler.Execute(context.Background(), ictx, params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != dag.StepCompleted {
+		t.Errorf("expected completed, got %s: %v", result.Status, result.Data["results"])
+	}
+}
+
 // ---------------------------------------------------------------------------
 // CollectLogs: no manager (short-circuit)
 // ---------------------------------------------------------------------------
@@ -727,4 +792,21 @@ type capturingLogSender struct {
 func (s *capturingLogSender) SendLogs(jobID string, logs []LogEntry) (time.Duration, error) {
 	s.entries = append(s.entries, logs...)
 	return 0, nil
+}
+
+func TestComputeDiff_CLIFormat(t *testing.T) {
+	before := "{\n  \"rowCount\": 141,\n  \"tables\": [\n    {\n      \"name\": \"products\",\n      \"rowCount\": 0\n    }\n  ]\n}\n"
+	after := "{\n  \"rowCount\": 183,\n  \"tables\": [\n    {\n      \"name\": \"products\",\n      \"rowCount\": 15\n    }\n  ]\n}\n"
+
+	expected := "--- db_state_before.json\n+++ db_state_after.json\n" +
+		"-  \"rowCount\": 141,\n+  \"rowCount\": 183,\n" +
+		"-      \"rowCount\": 0\n+      \"rowCount\": 15\n"
+	if got := computeDiff("db_state_before.json", "db_state_after.json", before, after); got != expected {
+		t.Errorf("unexpected diff:\n%s", got)
+	}
+
+	identical := "--- db_state_before.json\n+++ db_state_after.json\n"
+	if got := computeDiff("db_state_before.json", "db_state_after.json", before, before); got != identical {
+		t.Errorf("expected header only for identical files, got:\n%s", got)
+	}
 }
