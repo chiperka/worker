@@ -927,7 +927,7 @@ func TestExecutor_Finally_UnknownInstruction(t *testing.T) {
 }
 
 func TestExecutor_Finally_ParamResolutionFailure(t *testing.T) {
-	// Finally step references a state path that doesn't exist, causing param resolution error.
+	// Finally step references a step without output data, causing param resolution error.
 	handlers := map[string]Handler{
 		"ok": noop(),
 		"cleanup": func(ctx context.Context, p json.RawMessage) (*StepResult, error) {
@@ -938,7 +938,7 @@ func TestExecutor_Finally_ParamResolutionFailure(t *testing.T) {
 	job := &Job{
 		Steps: map[string]*Step{
 			"main":    {Instruction: "ok", Params: json.RawMessage(`{}`)},
-			"cleanup": {Instruction: "cleanup", Params: json.RawMessage(`{"ref": "$.nonexistent_step.value"}`)},
+			"cleanup": {Instruction: "cleanup", Params: json.RawMessage(`{"ref": "$.main.value"}`)},
 		},
 		Finally: []string{"cleanup"},
 	}

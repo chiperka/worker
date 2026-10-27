@@ -12,8 +12,11 @@ var refPattern = regexp.MustCompile(`^\$\.([a-zA-Z_][a-zA-Z0-9_]*)\.(.+)$`)
 
 // ResolveParams walks a JSON params blob and replaces all $.step_name.field
 // string references with actual values from the StateBag.
+// Only names of the job's steps and of results already in the StateBag are treated
+// as references, any other string of the same shape (e.g. a JSONPath like
+// $.items.count in an assertion) is kept as is.
 // Returns the resolved JSON or an error if a reference cannot be resolved.
-func ResolveParams(raw json.RawMessage, state *StateBag) (json.RawMessage, error) {
+func ResolveParams(raw json.RawMessage, steps map[string]*Step, state *StateBag) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		return raw, nil
 	}
@@ -23,7 +26,7 @@ func ResolveParams(raw json.RawMessage, state *StateBag) (json.RawMessage, error
 		return nil, fmt.Errorf("failed to parse params: %w", err)
 	}
 
-	resolved, err := resolveValue(value, state)
+	resolved, err := resolveValue(value, steps, state)
 	if err != nil {
 		return nil, err
 	}
@@ -32,14 +35,14 @@ func ResolveParams(raw json.RawMessage, state *StateBag) (json.RawMessage, error
 }
 
 // resolveValue recursively resolves references in any JSON value.
-func resolveValue(v interface{}, state *StateBag) (interface{}, error) {
+func resolveValue(v interface{}, steps map[string]*Step, state *StateBag) (interface{}, error) {
 	switch val := v.(type) {
 	case string:
-		return resolveString(val, state)
+		return resolveString(val, steps, state)
 	case map[string]interface{}:
-		return resolveMap(val, state)
+		return resolveMap(val, steps, state)
 	case []interface{}:
-		return resolveSlice(val, state)
+		return resolveSlice(val, steps, state)
 	default:
 		return v, nil
 	}
@@ -49,7 +52,7 @@ func resolveValue(v interface{}, state *StateBag) (interface{}, error) {
 // reference (e.g. "$.step.field"), it returns the raw value (preserving type).
 // If the string contains a reference as part of a larger string, it's not
 // resolved (references must be the entire value).
-func resolveString(s string, state *StateBag) (interface{}, error) {
+func resolveString(s string, steps map[string]*Step, state *StateBag) (interface{}, error) {
 	m := refPattern.FindStringSubmatch(s)
 	if m == nil {
 		return s, nil
@@ -59,6 +62,9 @@ func resolveString(s string, state *StateBag) (interface{}, error) {
 	fieldPath := m[2]
 
 	result := state.Get(stepName)
+	if _, isStep := steps[stepName]; !isStep && result == nil {
+		return s, nil
+	}
 	if result == nil {
 		return nil, fmt.Errorf("reference $.%s.%s: step %q has no result", stepName, fieldPath, stepName)
 	}
@@ -95,10 +101,10 @@ func resolveFieldPath(data map[string]interface{}, path string) (interface{}, er
 }
 
 // resolveMap resolves all values in a JSON object.
-func resolveMap(m map[string]interface{}, state *StateBag) (map[string]interface{}, error) {
+func resolveMap(m map[string]interface{}, steps map[string]*Step, state *StateBag) (map[string]interface{}, error) {
 	out := make(map[string]interface{}, len(m))
 	for k, v := range m {
-		resolved, err := resolveValue(v, state)
+		resolved, err := resolveValue(v, steps, state)
 		if err != nil {
 			return nil, err
 		}
@@ -108,10 +114,10 @@ func resolveMap(m map[string]interface{}, state *StateBag) (map[string]interface
 }
 
 // resolveSlice resolves all elements in a JSON array.
-func resolveSlice(arr []interface{}, state *StateBag) ([]interface{}, error) {
+func resolveSlice(arr []interface{}, steps map[string]*Step, state *StateBag) ([]interface{}, error) {
 	out := make([]interface{}, len(arr))
 	for i, v := range arr {
-		resolved, err := resolveValue(v, state)
+		resolved, err := resolveValue(v, steps, state)
 		if err != nil {
 			return nil, err
 		}

@@ -7,11 +7,20 @@ import (
 	"testing"
 )
 
+// jobSteps returns the step definitions of a job consisting of the given step names.
+func jobSteps(names ...string) map[string]*Step {
+	steps := make(map[string]*Step, len(names))
+	for _, name := range names {
+		steps[name] = &Step{Instruction: "noop"}
+	}
+	return steps
+}
+
 func TestResolveParams_NoRefs(t *testing.T) {
 	params := json.RawMessage(`{"method": "GET", "url": "/health", "count": 42}`)
 	state := NewStateBag()
 
-	resolved, err := ResolveParams(params, state)
+	resolved, err := ResolveParams(params, jobSteps(), state)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -35,7 +44,7 @@ func TestResolveParams_SimpleRef(t *testing.T) {
 	})
 
 	params := json.RawMessage(`{"network": "$.start_services.network_name"}`)
-	resolved, err := ResolveParams(params, state)
+	resolved, err := ResolveParams(params, jobSteps("start_services"), state)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -61,7 +70,7 @@ func TestResolveParams_NestedRef(t *testing.T) {
 	})
 
 	params := json.RawMessage(`{"status": "$.execute.response.status_code"}`)
-	resolved, err := ResolveParams(params, state)
+	resolved, err := ResolveParams(params, jobSteps("execute"), state)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -90,7 +99,7 @@ func TestResolveParams_DeeplyNested(t *testing.T) {
 	})
 
 	params := json.RawMessage(`{"x": "$.s.a.b.c.value"}`)
-	resolved, err := ResolveParams(params, state)
+	resolved, err := ResolveParams(params, jobSteps("s"), state)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -115,7 +124,7 @@ func TestResolveParams_PreservesType(t *testing.T) {
 	})
 
 	params := json.RawMessage(`{"ready": "$.svc.ready", "count": "$.svc.count", "labels": "$.svc.labels"}`)
-	resolved, err := ResolveParams(params, state)
+	resolved, err := ResolveParams(params, jobSteps("svc"), state)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -137,7 +146,7 @@ func TestResolveParams_PreservesType(t *testing.T) {
 
 func TestResolveParams_MissingStep(t *testing.T) {
 	state := NewStateBag()
-	_, err := ResolveParams(json.RawMessage(`{"val": "$.missing.field"}`), state)
+	_, err := ResolveParams(json.RawMessage(`{"val": "$.missing.field"}`), jobSteps("missing"), state)
 	if err == nil {
 		t.Fatal("expected error for missing step")
 	}
@@ -146,7 +155,7 @@ func TestResolveParams_MissingStep(t *testing.T) {
 func TestResolveParams_MissingField(t *testing.T) {
 	state := NewStateBag()
 	state.Set("step", &StepResult{Status: StepCompleted, Data: map[string]interface{}{"a": 1}})
-	_, err := ResolveParams(json.RawMessage(`{"val": "$.step.nonexistent"}`), state)
+	_, err := ResolveParams(json.RawMessage(`{"val": "$.step.nonexistent"}`), jobSteps("step"), state)
 	if err == nil {
 		t.Fatal("expected error for missing field")
 	}
@@ -158,7 +167,7 @@ func TestResolveParams_MissingNestedField(t *testing.T) {
 		Status: StepCompleted,
 		Data:   map[string]interface{}{"a": map[string]interface{}{"b": 1}},
 	})
-	_, err := ResolveParams(json.RawMessage(`{"val": "$.s.a.nonexistent"}`), state)
+	_, err := ResolveParams(json.RawMessage(`{"val": "$.s.a.nonexistent"}`), jobSteps("s"), state)
 	if err == nil {
 		t.Fatal("expected error for missing nested field")
 	}
@@ -170,7 +179,7 @@ func TestResolveParams_TraverseNonObject(t *testing.T) {
 		Status: StepCompleted,
 		Data:   map[string]interface{}{"x": "string_value"},
 	})
-	_, err := ResolveParams(json.RawMessage(`{"val": "$.s.x.nested"}`), state)
+	_, err := ResolveParams(json.RawMessage(`{"val": "$.s.x.nested"}`), jobSteps("s"), state)
 	if err == nil {
 		t.Fatal("expected error when traversing non-object")
 	}
@@ -179,7 +188,7 @@ func TestResolveParams_TraverseNonObject(t *testing.T) {
 func TestResolveParams_StepWithNilData(t *testing.T) {
 	state := NewStateBag()
 	state.Set("s", &StepResult{Status: StepCompleted, Data: nil})
-	_, err := ResolveParams(json.RawMessage(`{"val": "$.s.field"}`), state)
+	_, err := ResolveParams(json.RawMessage(`{"val": "$.s.field"}`), jobSteps("s"), state)
 	if err == nil {
 		t.Fatal("expected error for nil data")
 	}
@@ -193,7 +202,7 @@ func TestResolveParams_InArray(t *testing.T) {
 	})
 
 	params := json.RawMessage(`{"containers": ["$.svc.id", "static"]}`)
-	resolved, err := ResolveParams(params, state)
+	resolved, err := ResolveParams(params, jobSteps("svc"), state)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -213,7 +222,7 @@ func TestResolveParams_NestedInArray(t *testing.T) {
 	state.Set("b", &StepResult{Status: StepCompleted, Data: map[string]interface{}{"y": "v2"}})
 
 	params := json.RawMessage(`{"items": ["$.a.x", "$.b.y", "literal"]}`)
-	resolved, err := ResolveParams(params, state)
+	resolved, err := ResolveParams(params, jobSteps("a", "b"), state)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -228,7 +237,7 @@ func TestResolveParams_NestedInArray(t *testing.T) {
 }
 
 func TestResolveParams_EmptyParams(t *testing.T) {
-	resolved, err := ResolveParams(json.RawMessage(`{}`), NewStateBag())
+	resolved, err := ResolveParams(json.RawMessage(`{}`), jobSteps(), NewStateBag())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -238,7 +247,7 @@ func TestResolveParams_EmptyParams(t *testing.T) {
 }
 
 func TestResolveParams_NilParams(t *testing.T) {
-	resolved, err := ResolveParams(nil, NewStateBag())
+	resolved, err := ResolveParams(nil, jobSteps(), NewStateBag())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -249,7 +258,7 @@ func TestResolveParams_NilParams(t *testing.T) {
 
 func TestResolveParams_NonRefDollarString(t *testing.T) {
 	params := json.RawMessage(`{"price": "$100", "path": "/api/$version"}`)
-	resolved, err := ResolveParams(params, NewStateBag())
+	resolved, err := ResolveParams(params, jobSteps(), NewStateBag())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -265,6 +274,33 @@ func TestResolveParams_NonRefDollarString(t *testing.T) {
 	}
 }
 
+func TestResolveParams_UnknownStepIsNotARef(t *testing.T) {
+	state := NewStateBag()
+	state.Set("execute", &StepResult{
+		Status: StepCompleted,
+		Data:   map[string]interface{}{"response": map[string]interface{}{"status_code": float64(200)}},
+	})
+
+	// JSONPath assertions share the $.name.field shape with step references.
+	params := json.RawMessage(`{"json_path": [{"path": "$.titleTranslations.en", "expected": "Dimensions"}, {"path": "$.execute.response.status_code"}]}`)
+	resolved, err := ResolveParams(params, jobSteps("execute", "assert"), state)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result struct {
+		JSONPath []map[string]interface{} `json:"json_path"`
+	}
+	json.Unmarshal(resolved, &result)
+
+	if result.JSONPath[0]["path"] != "$.titleTranslations.en" {
+		t.Errorf("expected $.titleTranslations.en to be kept, got %v", result.JSONPath[0]["path"])
+	}
+	if result.JSONPath[1]["path"] != float64(200) {
+		t.Errorf("expected reference to execute step to resolve to 200, got %v", result.JSONPath[1]["path"])
+	}
+}
+
 func TestResolveParams_RefReturnsObject(t *testing.T) {
 	state := NewStateBag()
 	state.Set("s", &StepResult{
@@ -275,7 +311,7 @@ func TestResolveParams_RefReturnsObject(t *testing.T) {
 	})
 
 	params := json.RawMessage(`{"db": "$.s.config"}`)
-	resolved, err := ResolveParams(params, state)
+	resolved, err := ResolveParams(params, jobSteps("s"), state)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -298,7 +334,7 @@ func TestResolveParams_MultipleRefsInOneObject(t *testing.T) {
 	state.Set("b", &StepResult{Status: StepCompleted, Data: map[string]interface{}{"y": "val_b"}})
 
 	params := json.RawMessage(`{"from_a": "$.a.x", "from_b": "$.b.y", "literal": "keep"}`)
-	resolved, err := ResolveParams(params, state)
+	resolved, err := ResolveParams(params, jobSteps("a", "b"), state)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -312,7 +348,7 @@ func TestResolveParams_MultipleRefsInOneObject(t *testing.T) {
 }
 
 func TestResolveParams_InvalidJSON(t *testing.T) {
-	_, err := ResolveParams(json.RawMessage(`{not json`), NewStateBag())
+	_, err := ResolveParams(json.RawMessage(`{not json`), jobSteps(), NewStateBag())
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}

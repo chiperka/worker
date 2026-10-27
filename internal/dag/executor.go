@@ -189,7 +189,7 @@ func (e *Executor) executeDAG(ctx context.Context, steps map[string]*Step, state
 					e.progress(stepName, steps[stepName].Instruction, StepSkipped, result)
 					return
 				}
-				e.executeStep(ctx, stepName, steps[stepName], state, queuedAt)
+				e.executeStep(ctx, stepName, steps[stepName], steps, state, queuedAt)
 			}(name)
 		}
 		wg.Wait()
@@ -221,7 +221,7 @@ func (e *Executor) executeDAG(ctx context.Context, steps map[string]*Step, state
 
 // executeStep runs a single step, respecting run conditions, retry, and timeout.
 // queuedAt is when the step became ready (deps satisfied).
-func (e *Executor) executeStep(ctx context.Context, name string, step *Step, state *StateBag, queuedAt time.Time) {
+func (e *Executor) executeStep(ctx context.Context, name string, step *Step, steps map[string]*Step, state *StateBag, queuedAt time.Time) {
 	// Check run condition
 	if !e.shouldRun(step, state) {
 		result := &StepResult{Status: StepSkipped}
@@ -254,7 +254,7 @@ func (e *Executor) executeStep(ctx context.Context, name string, step *Step, sta
 	}
 
 	// Resolve params
-	resolvedParams, err := ResolveParams(step.Params, state)
+	resolvedParams, err := ResolveParams(step.Params, steps, state)
 	if err != nil {
 		result := &StepResult{
 			Status: StepFailed,
@@ -381,7 +381,7 @@ func (e *Executor) executeFinally(ctx context.Context, finallyNames []string, al
 			continue
 		}
 
-		resolvedParams, err := ResolveParams(step.Params, state)
+		resolvedParams, err := ResolveParams(step.Params, allSteps, state)
 		if err != nil {
 			result := &StepResult{
 				Status: StepFailed,
