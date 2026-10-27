@@ -324,7 +324,7 @@ func TestRegister_Success(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "spt_token", nil)
-	id, err := c.Register(context.Background(), "host1", 4, 100, 0, "1.0.0")
+	id, err := c.Register(context.Background(), "", "host1", 4, 100, 0, "1.0.0")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -346,12 +346,42 @@ func TestRegister_RetriesOnFailure(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "spt_token", nil)
-	id, err := c.Register(context.Background(), "host1", 4, 100, 0, "1.0.0")
+	id, err := c.Register(context.Background(), "", "host1", 4, 100, 0, "1.0.0")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if id != "w-456" {
 		t.Errorf("expected w-456, got %s", id)
+	}
+}
+
+func TestRegister_AdoptsIssuedToken(t *testing.T) {
+	var lastAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastAuth = r.Header.Get("Authorization")
+		if r.URL.Path == "/api/workers/register" {
+			var body map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&body)
+			if body["name"] != "ci-1" {
+				t.Errorf("expected name ci-1, got %v", body["name"])
+			}
+			json.NewEncoder(w).Encode(RegisterResponse{Status: "registered", WorkerID: "wj-1", Token: "spt_issued"})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "join-secret", nil)
+	if _, err := c.Register(context.Background(), "ci-1", "host1", 4, 100, 0, "1.0.0"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if lastAuth != "Bearer join-secret" {
+		t.Errorf("register should use the join token, got %q", lastAuth)
+	}
+	c.Heartbeat(context.Background(), "wj-1", 0, "")
+	if lastAuth != "Bearer spt_issued" {
+		t.Errorf("later calls should use the issued token, got %q", lastAuth)
 	}
 }
 

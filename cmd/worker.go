@@ -20,6 +20,7 @@ var workerMaxContainers int
 var workerTestTimeout int
 var workerID string
 var workerToken string
+var workerName string
 var workerDrainTimeout time.Duration
 
 var workerCmd = &cobra.Command{
@@ -33,7 +34,10 @@ via DAG instruction execution, and submits results back to the API.
 Example:
   chiperka-worker worker --api http://localhost:8080
   chiperka-worker worker --api http://localhost:8080 --concurrency 4
-  CHIPERKA_API_URL=https://hub.example.com CHIPERKA_WORKER_TOKEN=spt_... chiperka-worker worker`,
+  CHIPERKA_API_URL=https://hub.example.com CHIPERKA_WORKER_TOKEN=spt_... chiperka-worker worker
+
+The token is either a worker token from the hub UI, or the hub's join token
+(CHIPERKA_WORKER_JOIN_TOKEN on the hub), with which the worker registers itself.`,
 	RunE: runWorkerCmd,
 }
 
@@ -46,13 +50,17 @@ func init() {
 	workerCmd.Flags().IntVar(&workerMaxContainers, "max-containers", 0, "Maximum concurrent Docker containers (0 = unlimited)")
 	workerCmd.Flags().IntVar(&workerTestTimeout, "timeout", 300, "Maximum time in seconds for each test execution")
 	workerCmd.Flags().StringVar(&workerID, "id", "", "Worker ID (auto-generated if not provided)")
-	workerCmd.Flags().StringVar(&workerToken, "token", "", "Authentication token for API server (env: CHIPERKA_WORKER_TOKEN)")
+	workerCmd.Flags().StringVar(&workerToken, "token", "", "Worker token or the hub's join token (env: CHIPERKA_WORKER_TOKEN)")
+	workerCmd.Flags().StringVar(&workerName, "name", "", "Name shown in the hub, defaults to the hostname (env: CHIPERKA_WORKER_NAME)")
 	workerCmd.Flags().DurationVar(&workerDrainTimeout, "drain-timeout", 5*time.Minute, "Max time to wait for running jobs to finish on shutdown")
 }
 
 func runWorkerCmd(cmd *cobra.Command, args []string) error {
 	if workerToken == "" {
 		workerToken = os.Getenv("CHIPERKA_WORKER_TOKEN")
+	}
+	if workerName == "" {
+		workerName = os.Getenv("CHIPERKA_WORKER_NAME")
 	}
 	if !cmd.Flags().Changed("api") {
 		if url := os.Getenv("CHIPERKA_API_URL"); url != "" {
@@ -67,6 +75,7 @@ func runWorkerCmd(cmd *cobra.Command, args []string) error {
 	return workerloop.Run(workerloop.Config{
 		APIURL:        workerAPIURL,
 		Token:         workerToken,
+		Name:          workerName,
 		PollInterval:  workerPollInterval,
 		Concurrency:   workerParallel,
 		Capacity:      workerCapacity,

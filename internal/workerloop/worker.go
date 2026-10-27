@@ -20,6 +20,7 @@ import (
 type Config struct {
 	APIURL        string
 	Token         string
+	Name          string // shown in the hub; defaults to the hostname
 	PollInterval  time.Duration
 	Concurrency   int // max parallel test executions (hard limit)
 	Capacity      int // max concurrent weight (0 = auto: CPU count * 2)
@@ -73,7 +74,7 @@ func Run(cfg Config, logger *slog.Logger) error {
 
 	// Register with retries (cloud might not be ready yet)
 	regCtx, regCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	registeredID, err := api.Register(regCtx, hostname, cfg.Concurrency, cfg.Capacity, cfg.MaxContainers, cfg.Version)
+	registeredID, err := api.Register(regCtx, cfg.Name, hostname, cfg.Concurrency, cfg.Capacity, cfg.MaxContainers, cfg.Version)
 	regCancel()
 	if err != nil {
 		return fmt.Errorf("registration failed: %w", err)

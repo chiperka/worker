@@ -26,6 +26,23 @@ docker run -d --name chiperka-worker --restart unless-stopped \
   finie/chiperka-worker
 ```
 
+### Without the UI
+
+If the hub has `CHIPERKA_WORKER_JOIN_TOKEN` set, pass that token instead of a worker token. The worker then registers itself and needs no clicking in the UI, so it works in plain `docker compose up`:
+
+```yaml
+worker:
+  image: finie/chiperka-worker
+  environment:
+    CHIPERKA_API_URL: http://hub:8080
+    CHIPERKA_WORKER_TOKEN: ${CHIPERKA_JOIN_TOKEN}
+    CHIPERKA_WORKER_NAME: worker-1   # optional, defaults to the hostname
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+```
+
+On registration, the hub gives the worker its own token, which it uses from then on. If a worker restarts under the same name, it takes over its previous entry. When the hub runs with `CHIPERKA_AUTH=disabled` and has no join token set, the token can be left out entirely.
+
 Binaries for Linux and macOS are attached to every [release](https://github.com/chiperka/worker/releases):
 
 ```bash
@@ -37,7 +54,8 @@ CHIPERKA_API_URL=https://hub.example.com CHIPERKA_WORKER_TOKEN=spt_… chiperka-
 | Flag | Env | Default | Description |
 |---|---|---|---|
 | `--api` | `CHIPERKA_API_URL` | `http://localhost:8080` | Hub URL |
-| `--token` | `CHIPERKA_WORKER_TOKEN` | – | Worker token from the hub |
+| `--token` | `CHIPERKA_WORKER_TOKEN` | – | Worker token from the hub, or the hub's join token |
+| `--name` | `CHIPERKA_WORKER_NAME` | hostname | Name shown in the hub |
 | `--concurrency` | | CPU count | Maximum parallel tests |
 | `--capacity` | | CPU count × 2 | Maximum total test weight running at once |
 | `--max-containers` | | unlimited | Maximum concurrent containers |

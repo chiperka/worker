@@ -202,12 +202,16 @@ func (c *Client) postWithRetry(ctx context.Context, path string, body interface{
 type RegisterResponse struct {
 	Status   string `json:"status"`
 	WorkerID string `json:"worker_id"`
+	Token    string `json:"token,omitempty"` // issued when the worker joined with a join token
 }
 
 // Register registers the worker with the cloud API.
 // Retries up to 10 times with exponential backoff (cloud might not be ready yet).
-func (c *Client) Register(ctx context.Context, hostname string, concurrency int, capacity int, maxContainers int, version string) (string, error) {
+// If the server issues a worker token (self-registration with a join token),
+// the client uses it for all later requests.
+func (c *Client) Register(ctx context.Context, name, hostname string, concurrency int, capacity int, maxContainers int, version string) (string, error) {
 	body := map[string]interface{}{
+		"name":           name,
 		"hostname":       hostname,
 		"concurrency":    concurrency,
 		"capacity":       capacity,
@@ -232,6 +236,9 @@ func (c *Client) Register(ctx context.Context, hostname string, concurrency int,
 			case <-time.After(wait):
 			}
 			continue
+		}
+		if resp.Token != "" {
+			c.token = resp.Token
 		}
 		return resp.WorkerID, nil
 	}
