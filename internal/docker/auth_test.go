@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -180,5 +181,64 @@ func TestCurlImage_EnvOverride(t *testing.T) {
 	got := CurlImage()
 	if got != "my-registry.io/curl:v1" {
 		t.Errorf("CurlImage() = %q, want \"my-registry.io/curl:v1\"", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// job-scoped registry credentials
+// ---------------------------------------------------------------------------
+
+func decodeAuth(t *testing.T, encoded string) registry.AuthConfig {
+	t.Helper()
+	data, err := base64.URLEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var auth registry.AuthConfig
+	if err := json.Unmarshal(data, &auth); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return auth
+}
+
+func TestGetRegistryAuth_JobCredentialsOverrideEnv(t *testing.T) {
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+	t.Setenv("CHIPERKA_REGISTRY_HOST", "registry.gitlab.com")
+	t.Setenv("CHIPERKA_REGISTRY_USER", "env-user")
+	t.Setenv("CHIPERKA_REGISTRY_PASSWORD", "env-pass")
+
+	ctx := WithRegistryCredentials(context.Background(), []RegistryCredential{
+		{Host: "registry.gitlab.com", Username: "gitlab-ci-token", Password: "job-token"},
+	})
+	auth := decodeAuth(t, getRegistryAuth(ctx, "registry.gitlab.com/group/app/s3:sha-php-test"))
+	if auth.Username != "gitlab-ci-token" || auth.Password != "job-token" || auth.ServerAddress != "registry.gitlab.com" {
+		t.Errorf("unexpected auth: %+v", auth)
+	}
+}
+
+func TestGetRegistryAuth_JobCredentialsOnlyForMatchingHost(t *testing.T) {
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+	t.Setenv("CHIPERKA_REGISTRY_HOST", "")
+
+	ctx := WithRegistryCredentials(context.Background(), []RegistryCredential{
+		{Host: "registry.gitlab.com", Username: "gitlab-ci-token", Password: "job-token"},
+	})
+	if got := getRegistryAuth(ctx, "evil.example.com/app:latest"); got != "" {
+		t.Errorf("credentials leaked to another registry: %q", got)
+	}
+	if got := getRegistryAuth(ctx, "nginx:latest"); got != "" {
+		t.Errorf("credentials leaked to Docker Hub: %q", got)
+	}
+}
+
+func TestGetRegistryAuth_FallsBackToEnvWithoutJobCredentials(t *testing.T) {
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+	t.Setenv("CHIPERKA_REGISTRY_HOST", "registry.gitlab.com")
+	t.Setenv("CHIPERKA_REGISTRY_USER", "env-user")
+	t.Setenv("CHIPERKA_REGISTRY_PASSWORD", "env-pass")
+
+	auth := decodeAuth(t, getRegistryAuth(WithRegistryCredentials(context.Background(), nil), "registry.gitlab.com/group/app:tag"))
+	if auth.Username != "env-user" {
+		t.Errorf("expected env credentials, got %+v", auth)
 	}
 }

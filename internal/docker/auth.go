@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -11,21 +12,53 @@ import (
 	"github.com/docker/docker/api/types/registry"
 )
 
+// RegistryCredential is a job-scoped registry login, e.g. a CI job token
+// the submitting pipeline passed through the hub.
+type RegistryCredential struct {
+	Host     string
+	Username string
+	Password string
+}
+
+type registryCredentialsKey struct{}
+
+// WithRegistryCredentials returns a context whose image pulls use creds for matching registries.
+func WithRegistryCredentials(ctx context.Context, creds []RegistryCredential) context.Context {
+	if len(creds) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, registryCredentialsKey{}, creds)
+}
+
 // getRegistryAuth returns a base64-encoded JSON AuthConfig for the given image's
 // registry, or an empty string if no credentials are found.
 //
 // Priority:
-//  1. CHIPERKA_REGISTRY_USER + CHIPERKA_REGISTRY_PASSWORD + CHIPERKA_REGISTRY_HOST env vars
-//  2. ~/.docker/config.json (standard docker login credentials)
+//  1. Job-scoped credentials from ctx (see WithRegistryCredentials)
+//  2. CHIPERKA_REGISTRY_USER + CHIPERKA_REGISTRY_PASSWORD + CHIPERKA_REGISTRY_HOST env vars
+//  3. ~/.docker/config.json (standard docker login credentials)
 //
-// Env var credentials are only sent when the image's registry matches
-// CHIPERKA_REGISTRY_HOST, preventing credential leaks to untrusted registries.
+// Job-scoped and env var credentials are only sent when the image's registry matches
+// their host, preventing credential leaks to untrusted registries.
 //
 // Returns empty string on any error — public images pull without auth as before.
-func getRegistryAuth(image string) string {
+func getRegistryAuth(ctx context.Context, image string) string {
 	host := registryHost(image)
 
-	// 1. Check env vars — requires CHIPERKA_REGISTRY_HOST to scope credentials
+	// 1. Check job-scoped credentials
+	if creds, ok := ctx.Value(registryCredentialsKey{}).([]RegistryCredential); ok {
+		for _, c := range creds {
+			if c.Host != "" && c.Host == host && c.Username != "" && c.Password != "" {
+				return encodeAuth(registry.AuthConfig{
+					Username:      c.Username,
+					Password:      c.Password,
+					ServerAddress: host,
+				})
+			}
+		}
+	}
+
+	// 2. Check env vars — requires CHIPERKA_REGISTRY_HOST to scope credentials
 	if envHost := os.Getenv("CHIPERKA_REGISTRY_HOST"); envHost != "" && envHost == host {
 		if user := os.Getenv("CHIPERKA_REGISTRY_USER"); user != "" {
 			if pass := os.Getenv("CHIPERKA_REGISTRY_PASSWORD"); pass != "" {
@@ -38,7 +71,7 @@ func getRegistryAuth(image string) string {
 		}
 	}
 
-	// 2. Check docker config
+	// 3. Check docker config
 	auth := lookupDockerConfig(host)
 	if auth != "" {
 		return auth

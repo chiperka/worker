@@ -25,6 +25,15 @@ type Job struct {
 	Meta           json.RawMessage  `json:"meta,omitempty"`
 	Weight         int              `json:"weight"`
 	ContainerCount int              `json:"container_count"`
+	// RegistryAuth carries job-scoped pull credentials (e.g. a CI job token) sent by the hub.
+	RegistryAuth []RegistryAuth `json:"registry_auth,omitempty"`
+}
+
+// RegistryAuth holds credentials for pulling images from Host.
+type RegistryAuth struct {
+	Host     string `json:"host"`
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 // Step is a single instruction in the job DAG.

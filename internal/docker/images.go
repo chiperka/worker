@@ -58,7 +58,7 @@ func PrewarmImages(ctx context.Context, images []string) int {
 
 			// Pull image
 			reader, err := defaultDockerClient.ImagePull(ctx, img, imagetypes.PullOptions{
-				RegistryAuth: getRegistryAuth(img),
+				RegistryAuth: getRegistryAuth(ctx, img),
 			})
 			if err != nil {
 				return

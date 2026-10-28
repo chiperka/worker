@@ -468,7 +468,7 @@ func (m *Manager) resolveImage(ctx context.Context, service model.Service) (stri
 	if err != nil {
 		m.logger.Info(fmt.Sprintf("[%s] Pulling Docker image", m.testName))
 		reader, pullErr := m.client.ImagePull(ctx, service.Image, imagetypes.PullOptions{
-			RegistryAuth: getRegistryAuth(service.Image),
+			RegistryAuth: getRegistryAuth(ctx, service.Image),
 		})
 		if pullErr != nil {
 			return "", fmt.Errorf("failed to pull image %s: %w", service.Image, pullErr)
@@ -538,7 +538,7 @@ func pullImageOnce(ctx context.Context, image string) {
 	}()
 
 	reader, err := defaultDockerClient.ImagePull(ctx, image, imagetypes.PullOptions{
-		RegistryAuth: getRegistryAuth(image),
+		RegistryAuth: getRegistryAuth(ctx, image),
 	})
 	if err != nil {
 		return

@@ -10,6 +10,7 @@ import (
 
 	"chiperka-worker/internal/apiclient"
 	"chiperka-worker/internal/dag"
+	"chiperka-worker/internal/docker"
 	"chiperka-worker/internal/instruction"
 )
 
@@ -87,6 +88,13 @@ func ExecuteJob(ctx context.Context, api *apiclient.Client, job *dag.Job, meta *
 
 	ictx.Log("info", "job_started", "", fmt.Sprintf("Job %s started on %s", job.JobID, executorID), "")
 	jlog.Info("job started")
+
+	// Image pulls in this job may use the registry credentials the hub attached to it
+	creds := make([]docker.RegistryCredential, 0, len(job.RegistryAuth))
+	for _, ra := range job.RegistryAuth {
+		creds = append(creds, docker.RegistryCredential{Host: ra.Host, Username: ra.Username, Password: ra.Password})
+	}
+	ctx = docker.WithRegistryCredentials(ctx, creds)
 
 	// Execute DAG
 	executor := dag.NewExecutor(dagHandlers, progress)
