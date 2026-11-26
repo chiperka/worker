@@ -822,3 +822,36 @@ func TestLogSenderAdapter_SendLogs(t *testing.T) {
 
 // Verify LogSenderAdapter satisfies instruction.LogSender interface at compile time.
 var _ instruction.LogSender = (*LogSenderAdapter)(nil)
+
+func TestRegister_RejectedTokenFailsAtOnce(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	start := time.Now()
+	if _, err := New(srv.URL, "spt_bad", nil).Register(ctx, "", "host1", 4, 100, 0, "1.0.0"); err == nil {
+		t.Fatal("expected an error")
+	}
+	if n := atomic.LoadInt32(&calls); n != 1 || time.Since(start) > 5*time.Second {
+		t.Fatalf("a 403 must not be retried: %d calls in %s", n, time.Since(start))
+	}
+}
+
+func TestRegister_StopsWhenContextEnds(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := New(srv.URL, "spt_token", nil).Register(ctx, "", "host1", 4, 100, 0, "1.0.0")
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("want a deadline error, got %v", err)
+	}
+}

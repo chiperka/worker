@@ -3,8 +3,10 @@
 package cmd
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -62,6 +64,37 @@ func runWorkerCmd(cmd *cobra.Command, args []string) error {
 	if workerName == "" {
 		workerName = os.Getenv("CHIPERKA_WORKER_NAME")
 	}
+	// Flags win; environment variables let container setups (e.g. cloud servers) configure the rest.
+	envInt := func(flag, key string, dst *int) error {
+		if v := os.Getenv(key); v != "" && !cmd.Flags().Changed(flag) {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("%s: %w", key, err)
+			}
+			*dst = n
+		}
+		return nil
+	}
+	for _, e := range []struct {
+		flag, key string
+		dst       *int
+	}{
+		{"concurrency", "CHIPERKA_WORKER_CONCURRENCY", &workerParallel},
+		{"capacity", "CHIPERKA_WORKER_CAPACITY", &workerCapacity},
+		{"max-containers", "CHIPERKA_WORKER_MAX_CONTAINERS", &workerMaxContainers},
+	} {
+		if err := envInt(e.flag, e.key, e.dst); err != nil {
+			return err
+		}
+	}
+	registerTimeout := 2 * time.Minute
+	if v := os.Getenv("CHIPERKA_REGISTER_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("CHIPERKA_REGISTER_TIMEOUT: %w", err)
+		}
+		registerTimeout = d
+	}
 	if !cmd.Flags().Changed("api") {
 		if url := os.Getenv("CHIPERKA_API_URL"); url != "" {
 			workerAPIURL = url
@@ -73,16 +106,17 @@ func runWorkerCmd(cmd *cobra.Command, args []string) error {
 	}))
 
 	return workerloop.Run(workerloop.Config{
-		APIURL:        workerAPIURL,
-		Token:         workerToken,
-		Name:          workerName,
-		PollInterval:  workerPollInterval,
-		Concurrency:   workerParallel,
-		Capacity:      workerCapacity,
-		MaxContainers: workerMaxContainers,
-		TestTimeout:   workerTestTimeout,
-		WorkerID:      workerID,
-		DrainTimeout:  workerDrainTimeout,
-		Version:       Version,
+		APIURL:          workerAPIURL,
+		Token:           workerToken,
+		Name:            workerName,
+		PollInterval:    workerPollInterval,
+		Concurrency:     workerParallel,
+		Capacity:        workerCapacity,
+		MaxContainers:   workerMaxContainers,
+		TestTimeout:     workerTestTimeout,
+		WorkerID:        workerID,
+		DrainTimeout:    workerDrainTimeout,
+		RegisterTimeout: registerTimeout,
+		Version:         Version,
 	}, logger)
 }

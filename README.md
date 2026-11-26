@@ -56,11 +56,14 @@ CHIPERKA_API_URL=https://hub.example.com CHIPERKA_WORKER_TOKEN=spt_… chiperka-
 | `--api` | `CHIPERKA_API_URL` | `http://localhost:8080` | Hub URL |
 | `--token` | `CHIPERKA_WORKER_TOKEN` | – | Worker token from the hub, or the hub's join token |
 | `--name` | `CHIPERKA_WORKER_NAME` | hostname | Name shown in the hub |
-| `--concurrency` | | CPU count | Maximum parallel tests |
-| `--capacity` | | CPU count × 2 | Maximum total test weight running at once |
-| `--max-containers` | | unlimited | Maximum concurrent containers |
+| `--concurrency` | `CHIPERKA_WORKER_CONCURRENCY` | CPU count | Maximum parallel tests |
+| `--capacity` | `CHIPERKA_WORKER_CAPACITY` | CPU count × 2 | Maximum total test weight running at once |
+| `--max-containers` | `CHIPERKA_WORKER_MAX_CONTAINERS` | unlimited | Maximum concurrent containers |
 | `--timeout` | | `300` | Per-test timeout in seconds |
 | `--drain-timeout` | | `5m` | How long to wait for running tests on shutdown |
+| | `CHIPERKA_REGISTER_TIMEOUT` | `2m` | How long to keep trying to reach the hub on start (Go duration, e.g. `90s`, `10m`); an invalid token fails at once |
+
+Flags take precedence over environment variables.
 
 Each test's **weight** is the sum of its services' weights, with a default of 1 per service. A test heavier than `--capacity` still runs, but only when the worker is otherwise idle.
 
@@ -78,7 +81,7 @@ The env credentials are only sent to `CHIPERKA_REGISTRY_HOST`.
 
 ### Notes
 
-- Run one worker per Docker daemon. On startup, a worker removes leftover Chiperka containers and networks.
+- Run one worker per Docker daemon. On startup, a worker removes leftover test containers (`chiperka-<id>-<service>`) and networks (`chiperka-<id>`). Before 2.10 it removed every container whose name contained `chiperka-`, including its own when named e.g. `chiperka-worker`.
 - On `SIGTERM`, the worker stops taking new jobs and lets running ones finish, waiting up to `--drain-timeout`. The hub can also cancel a running job, for example when a run is stopped.
 
 ## Development

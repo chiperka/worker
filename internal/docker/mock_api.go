@@ -33,6 +33,7 @@ type MockDockerAPI struct {
 	ExecCreateFn        func(ctx context.Context, container string, config container.ExecOptions) (types.IDResponse, error)
 	ExecAttachFn        func(ctx context.Context, execID string, config container.ExecAttachOptions) (types.HijackedResponse, error)
 	ExecInspectFn       func(ctx context.Context, execID string) (container.ExecInspect, error)
+	ContainerListFn     func(ctx context.Context, options container.ListOptions) ([]types.Container, error)
 }
 
 func (m *MockDockerAPI) Ping(ctx context.Context) (types.Ping, error) {
@@ -164,6 +165,9 @@ func (m *MockDockerAPI) ContainerExecInspect(ctx context.Context, execID string)
 }
 
 func (m *MockDockerAPI) ContainerList(ctx context.Context, options container.ListOptions) ([]types.Container, error) {
+	if m.ContainerListFn != nil {
+		return m.ContainerListFn(ctx, options)
+	}
 	return nil, nil
 }
 
