@@ -206,7 +206,8 @@ type RegisterResponse struct {
 }
 
 // Register registers the worker with the cloud API.
-// Retries up to 10 times with exponential backoff (cloud might not be ready yet).
+// Retries transient errors with exponential backoff until ctx ends (the hub might
+// not be reachable yet); a rejected token fails at once.
 // If the server issues a worker token (self-registration with a join token),
 // the client uses it for all later requests.
 func (c *Client) Register(ctx context.Context, name, hostname string, concurrency int, capacity int, maxContainers int, version string) (string, error) {
@@ -221,9 +222,17 @@ func (c *Client) Register(ctx context.Context, name, hostname string, concurrenc
 
 	var resp RegisterResponse
 	var lastErr error
-	for attempt := 0; attempt < 10; attempt++ {
+	// Retry until ctx ends: the caller decides how long the hub may be away
+	// (e.g. a cloud server's tunnel comes up a while after boot).
+	for attempt := 0; ; attempt++ {
 		if err := c.post(ctx, "/api/workers/register", body, &resp); err != nil {
 			lastErr = err
+			if apiErr, ok := err.(*APIError); ok && apiErr.Err == nil {
+				switch apiErr.StatusCode {
+				case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+					return "", fmt.Errorf("registration rejected: %w", err) // e.g. an invalid token
+				}
+			}
 			wait := Backoff(2*time.Second, attempt, 30*time.Second)
 			c.logger.Warn("registration failed, retrying",
 				"attempt", attempt+1,
@@ -232,7 +241,7 @@ func (c *Client) Register(ctx context.Context, name, hostname string, concurrenc
 			)
 			select {
 			case <-ctx.Done():
-				return "", fmt.Errorf("registration cancelled: %w", ctx.Err())
+				return "", fmt.Errorf("registration failed after %d attempts: %w (%w)", attempt+1, lastErr, ctx.Err())
 			case <-time.After(wait):
 			}
 			continue
@@ -242,7 +251,6 @@ func (c *Client) Register(ctx context.Context, name, hostname string, concurrenc
 		}
 		return resp.WorkerID, nil
 	}
-	return "", fmt.Errorf("failed to register after 10 attempts: %w", lastErr)
 }
 
 // HeartbeatResponse is the API response from heartbeat.

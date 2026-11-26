@@ -28,7 +28,9 @@ type Config struct {
 	TestTimeout   int
 	WorkerID      string
 	DrainTimeout  time.Duration
-	Version       string
+	// RegisterTimeout is how long to keep trying to reach the hub on start (default 2m).
+	RegisterTimeout time.Duration
+	Version         string
 }
 
 // Run is the main worker lifecycle: register → claim → execute → shutdown.
@@ -73,7 +75,10 @@ func Run(cfg Config, logger *slog.Logger) error {
 	api := apiclient.New(cfg.APIURL, cfg.Token, logger)
 
 	// Register with retries (cloud might not be ready yet)
-	regCtx, regCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	if cfg.RegisterTimeout <= 0 {
+		cfg.RegisterTimeout = 2 * time.Minute
+	}
+	regCtx, regCancel := context.WithTimeout(context.Background(), cfg.RegisterTimeout)
 	registeredID, err := api.Register(regCtx, cfg.Name, hostname, cfg.Concurrency, cfg.Capacity, cfg.MaxContainers, cfg.Version)
 	regCancel()
 	if err != nil {
@@ -198,4 +203,3 @@ func Run(cfg Config, logger *slog.Logger) error {
 	logger.Info("worker stopped")
 	return nil
 }
-

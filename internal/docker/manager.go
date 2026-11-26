@@ -11,10 +11,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	imagetypes "github.com/docker/docker/api/types/image"
@@ -315,6 +317,9 @@ func CleanupStaleNetworks() {
 
 	var wg sync.WaitGroup
 	for _, net := range networks {
+		if !staleNetworkName.MatchString(net.Name) {
+			continue
+		}
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
@@ -325,24 +330,53 @@ func CleanupStaleNetworks() {
 	wg.Wait()
 }
 
-// CleanupStaleContainers removes all chiperka- containers that are still running.
-// This catches orphaned containers from previous runs where cleanup failed.
+// Test resources are named chiperka-<16 hex> (networks) and
+// chiperka-<16 hex>-<service> (containers). The cleanup matches exactly these:
+// Docker's name filter is a substring match, and a looser match used to remove
+// the worker's own container when it was named e.g. "chiperka-worker".
+var (
+	staleNetworkName   = regexp.MustCompile(`^chiperka-[0-9a-f]{16}$`)
+	staleContainerName = regexp.MustCompile(`^/?chiperka-[0-9a-f]{16}-`)
+	containerIDPrefix  = regexp.MustCompile(`^[0-9a-f]{12}$`)
+)
+
+// isStaleTestContainer reports whether c is a leftover test container. self is
+// this process's container ID prefix (its hostname inside a container), never removed.
+func isStaleTestContainer(c types.Container, self string) bool {
+	if self != "" && strings.HasPrefix(c.ID, self) {
+		return false
+	}
+	for _, n := range c.Names {
+		if staleContainerName.MatchString(n) {
+			return true
+		}
+	}
+	return false
+}
+
+// CleanupStaleContainers removes test containers left over from previous runs
+// where cleanup failed.
 func CleanupStaleContainers() {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	containers, err := defaultDockerClient.ContainerList(ctx, container.ListOptions{
+		All:     true,
 		Filters: filters.NewArgs(filters.Arg("name", "chiperka-")),
 	})
 	if err != nil {
 		return
 	}
-
-	if len(containers) == 0 {
-		return
+	// Inside a container the default hostname is the 12-character container ID.
+	self, _ := os.Hostname()
+	if !containerIDPrefix.MatchString(self) {
+		self = ""
 	}
 
 	var wg sync.WaitGroup
 	for _, c := range containers {
+		if !isStaleTestContainer(c, self) {
+			continue
+		}
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
